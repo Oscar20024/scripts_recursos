@@ -1,179 +1,619 @@
 #######################################################################
-# Title       : JumpScare Safe
+# Title       : JumpScare Safe Robust
 # Author      : Oscar20024
-# Description : Muestra temporalmente una imagen a pantalla completa
-#               y reproduce un audio sin modificar el fondo de Windows.
 # Target      : Windows 10 / Windows 11
+#
+# DESCRIPCIÓN:
+# - Descarga una imagen y un audio propios desde GitHub.
+# - Realiza varios intentos de descarga.
+# - Valida que los archivos realmente existan.
+# - Espera 5 segundos.
+# - Muestra temporalmente la imagen a pantalla completa.
+# - Reproduce el audio.
+# - NO modifica el fondo de Windows.
+# - NO espera movimiento del mouse.
+# - Solo elimina sus propios archivos temporales.
+#
+# Uso: únicamente en equipos propios o con autorización.
 #######################################################################
 
-$imageUrl = "https://raw.githubusercontent.com/Oscar20024/scripts_recursos/main/jumpscare.png"
-$wavUrl   = "https://raw.githubusercontent.com/Oscar20024/scripts_recursos/main/scream.wav"
 
+# =====================================================================
+# 1. CONFIGURACIÓN GENERAL
+# =====================================================================
+
+$ErrorActionPreference = "Stop"
+
+
+# URL directa de tu imagen
+$imageUrl = "https://raw.githubusercontent.com/Oscar20024/scripts_recursos/main/jumpscare.png"
+
+
+# URL directa de tu audio
+$wavUrl = "https://raw.githubusercontent.com/Oscar20024/scripts_recursos/main/scream.wav"
+
+
+# Tiempo que espera antes de mostrar el efecto
+$delayBeforeEffect = 5
+
+
+# Tiempo que la imagen permanecerá en pantalla
+$effectDuration = 5
+
+
+# Carpeta temporal exclusiva del script
 $workFolder = Join-Path $env:TEMP "JumpScareSafe"
-$imagePath  = Join-Path $workFolder "jumpscare.png"
-$wavPath    = Join-Path $workFolder "scream.wav"
+
+
+# Rutas temporales
+$imagePath = Join-Path $workFolder "jumpscare.png"
+
+$wavPath = Join-Path $workFolder "scream.wav"
+
+$logPath = Join-Path $workFolder "JumpScareSafe.log"
+
+
+# =====================================================================
+# 2. INTENTAR UTILIZAR TLS 1.2
+#
+# Esto mejora la compatibilidad con algunas versiones antiguas de
+# Windows PowerShell.
+#
+# NO desactiva la comprobación de certificados.
+# =====================================================================
 
 try {
 
-    # Crear carpeta temporal exclusiva.
-    if (-not (Test-Path $workFolder)) {
-        New-Item -ItemType Directory -Path $workFolder -Force | Out-Null
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.SecurityProtocolType]::Tls12
+
+}
+catch {
+
+    # Continúa normalmente si no es necesario.
+}
+
+
+# =====================================================================
+# 3. CREAR CARPETA TEMPORAL
+# =====================================================================
+
+if (-not (Test-Path $workFolder)) {
+
+    New-Item `
+        -ItemType Directory `
+        -Path $workFolder `
+        -Force | Out-Null
+}
+
+
+# =====================================================================
+# 4. FUNCIÓN PARA REGISTRAR INFORMACIÓN
+# =====================================================================
+
+function Write-Log {
+
+    param (
+
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+
+    $line = "[$timestamp] $Message"
+
+
+    Write-Host $line
+
+
+    try {
+
+        Add-Content `
+            -Path $logPath `
+            -Value $line `
+            -ErrorAction SilentlyContinue
+
+    }
+    catch {
+
+        # El registro es opcional.
+    }
+}
+
+
+# =====================================================================
+# 5. FUNCIÓN PARA VALIDAR ARCHIVOS
+# =====================================================================
+
+function Test-ValidFile {
+
+    param (
+
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+
+        [long]$MinimumBytes = 100
+    )
+
+
+    # Comprobar si existe
+    if (-not (Test-Path $Path)) {
+
+        return $false
     }
 
-    Write-Host "Descargando imagen..."
 
-    Invoke-WebRequest `
-        -Uri $imageUrl `
-        -OutFile $imagePath `
-        -ErrorAction Stop
+    try {
 
-    Write-Host "Descargando audio..."
-
-    Invoke-WebRequest `
-        -Uri $wavUrl `
-        -OutFile $wavPath `
-        -ErrorAction Stop
+        $file = Get-Item `
+            -Path $Path `
+            -ErrorAction Stop
 
 
-    # -------------------------------------------------------------
-    # Esperar movimiento del mouse
-    # -------------------------------------------------------------
+        # Comprobar tamaño mínimo
+        if ($file.Length -lt $MinimumBytes) {
 
-    Add-Type -AssemblyName System.Windows.Forms
+            return $false
+        }
 
-    $originalPosition = [System.Windows.Forms.Cursor]::Position
 
-    Write-Host "Esperando movimiento del mouse..."
+        return $true
 
-    while ($true) {
+    }
+    catch {
 
-        Start-Sleep -Milliseconds 250
+        return $false
+    }
+}
 
-        $currentPosition = [System.Windows.Forms.Cursor]::Position
 
-        if (
-            $currentPosition.X -ne $originalPosition.X -or
-            $currentPosition.Y -ne $originalPosition.Y
-        ) {
-            break
+# =====================================================================
+# 6. FUNCIÓN DE DESCARGA ROBUSTA
+#
+# Primero intenta:
+# Invoke-WebRequest
+#
+# Si falla y BITS está disponible:
+# Start-BitsTransfer
+#
+# No desactiva la validación HTTPS.
+# =====================================================================
+
+function Download-SafeFile {
+
+    param (
+
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination,
+
+
+        [long]$MinimumBytes = 100
+    )
+
+
+    # Eliminar una posible descarga anterior incompleta
+    Remove-Item `
+        -Path $Destination `
+        -Force `
+        -ErrorAction SilentlyContinue
+
+
+    # -----------------------------------------------------------------
+    # MÉTODO 1: INVOKE-WEBREQUEST
+    # -----------------------------------------------------------------
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+
+        try {
+
+            Write-Log "Intentando descarga con Invoke-WebRequest. Intento $attempt de 3."
+
+
+            Invoke-WebRequest `
+                -Uri $Url `
+                -OutFile $Destination `
+                -UseBasicParsing `
+                -ErrorAction Stop
+
+
+            if (
+                Test-ValidFile `
+                    -Path $Destination `
+                    -MinimumBytes $MinimumBytes
+            ) {
+
+                Write-Log "Archivo descargado correctamente."
+
+                return $true
+            }
+
+
+            Write-Log "El archivo descargado no superó la validación."
+
+        }
+        catch {
+
+            Write-Log "Error en intento ${attempt}: $($_.Exception.Message)"
+        }
+
+
+        # Eliminar archivo incompleto
+        Remove-Item `
+            -Path $Destination `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+
+        Start-Sleep -Seconds 2
+    }
+
+
+    # -----------------------------------------------------------------
+    # MÉTODO 2: BITS
+    # -----------------------------------------------------------------
+
+    $bitsAvailable = Get-Command `
+        Start-BitsTransfer `
+        -ErrorAction SilentlyContinue
+
+
+    if ($bitsAvailable) {
+
+        try {
+
+            Write-Log "Intentando descarga mediante BITS."
+
+
+            Start-BitsTransfer `
+                -Source $Url `
+                -Destination $Destination `
+                -ErrorAction Stop
+
+
+            if (
+                Test-ValidFile `
+                    -Path $Destination `
+                    -MinimumBytes $MinimumBytes
+            ) {
+
+                Write-Log "Archivo descargado correctamente mediante BITS."
+
+                return $true
+            }
+
+        }
+        catch {
+
+            Write-Log "BITS falló: $($_.Exception.Message)"
         }
     }
 
 
-    # -------------------------------------------------------------
-    # Cargar componentes gráficos de Windows
-    # -------------------------------------------------------------
+    # Ningún método funcionó
+    return $false
+}
+
+
+# =====================================================================
+# 7. FUNCIÓN PARA MOSTRAR LA IMAGEN Y REPRODUCIR EL AUDIO
+#
+# IMPORTANTE:
+# Esta función NO modifica el fondo de pantalla real de Windows.
+#
+# Solo crea una ventana temporal.
+# =====================================================================
+
+function Show-JumpScare {
+
+    param (
+
+        [Parameter(Mandatory = $true)]
+        [string]$Image,
+
+
+        [Parameter(Mandatory = $true)]
+        [string]$Audio,
+
+
+        [int]$DurationSeconds = 5
+    )
+
+
+    # -----------------------------------------------------------------
+    # CARGAR COMPONENTES GRÁFICOS
+    # -----------------------------------------------------------------
 
     Add-Type -AssemblyName PresentationFramework
+
     Add-Type -AssemblyName PresentationCore
+
     Add-Type -AssemblyName WindowsBase
 
 
-    # -------------------------------------------------------------
-    # Crear ventana temporal a pantalla completa
-    # -------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # CREAR VENTANA
+    # -----------------------------------------------------------------
 
     $window = New-Object System.Windows.Window
 
+
+    # Sin bordes
     $window.WindowStyle = "None"
+
+
+    # Maximizada
     $window.WindowState = "Maximized"
+
+
+    # No permitir redimensionamiento
     $window.ResizeMode = "NoResize"
+
+
+    # Mostrar encima de otras ventanas
     $window.Topmost = $true
+
+
+    # Fondo negro para zonas no cubiertas
     $window.Background = "Black"
 
 
-    # -------------------------------------------------------------
-    # Cargar imagen
-    # -------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # CARGAR LA IMAGEN
+    # -----------------------------------------------------------------
 
-    $image = New-Object System.Windows.Controls.Image
+    $imageControl = New-Object System.Windows.Controls.Image
 
-    $bitmap = New-Object System.Windows.Media.Imaging.BitmapImage
+
+    $bitmap = New-Object `
+        System.Windows.Media.Imaging.BitmapImage
+
 
     $bitmap.BeginInit()
-    $bitmap.CacheOption = "OnLoad"
-    $bitmap.UriSource = New-Object System.Uri($imagePath)
+
+
+    $bitmap.CacheOption = `
+        [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+
+
+    $bitmap.UriSource = `
+        New-Object System.Uri($Image)
+
+
     $bitmap.EndInit()
 
-    $image.Source = $bitmap
-    $image.Stretch = "Uniform"
 
-    $window.Content = $image
+    $imageControl.Source = $bitmap
 
 
-    # -------------------------------------------------------------
-    # Preparar audio
-    # -------------------------------------------------------------
+    # Usar toda la pantalla conservando proporciones
+    $imageControl.Stretch = "Uniform"
+
+
+    $window.Content = $imageControl
+
+
+    # -----------------------------------------------------------------
+    # PREPARAR AUDIO
+    # -----------------------------------------------------------------
 
     $player = New-Object System.Media.SoundPlayer
-    $player.SoundLocation = $wavPath
+
+
+    $player.SoundLocation = $Audio
+
+
     $player.Load()
 
 
-    # -------------------------------------------------------------
-    # Temporizador para cerrar automáticamente la ventana
-    # después de 5 segundos.
-    # -------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # CREAR TEMPORIZADOR
+    #
+    # Al cumplirse el tiempo especificado:
+    # - detiene el temporizador
+    # - detiene el audio
+    # - cierra la ventana
+    # -----------------------------------------------------------------
 
-    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer = New-Object `
+        System.Windows.Threading.DispatcherTimer
 
-    $timer.Interval = [TimeSpan]::FromSeconds(5)
+
+    $timer.Interval = `
+        [TimeSpan]::FromSeconds($DurationSeconds)
+
 
     $timer.Add_Tick({
 
         $timer.Stop()
 
+
+        try {
+
+            $player.Stop()
+
+        }
+        catch {
+
+            # Ignorar errores al detener audio.
+        }
+
+
         $window.Close()
     })
 
 
-    # -------------------------------------------------------------
-    # Mostrar imagen y reproducir audio
-    # -------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # AL MOSTRAR LA VENTANA:
+    #
+    # 1. Reproducir audio
+    # 2. Iniciar temporizador
+    # -----------------------------------------------------------------
 
     $window.Add_ContentRendered({
 
-        $player.Play()
+        try {
+
+            $player.Play()
+
+        }
+        catch {
+
+            Write-Log "No se pudo reproducir el audio."
+        }
+
 
         $timer.Start()
     })
 
 
+    # -----------------------------------------------------------------
+    # MOSTRAR VENTANA
+    # -----------------------------------------------------------------
+
     $window.ShowDialog() | Out-Null
 }
 
+
+# =====================================================================
+# 8. EJECUCIÓN PRINCIPAL
+# =====================================================================
+
+try {
+
+    Write-Log "Iniciando JumpScare Safe."
+
+
+    # -----------------------------------------------------------------
+    # DESCARGAR IMAGEN
+    # -----------------------------------------------------------------
+
+    Write-Log "Descargando imagen."
+
+
+    $imageDownloaded = Download-SafeFile `
+        -Url $imageUrl `
+        -Destination $imagePath `
+        -MinimumBytes 1000
+
+
+    if (-not $imageDownloaded) {
+
+        throw "No se pudo descargar o validar la imagen."
+    }
+
+
+    # -----------------------------------------------------------------
+    # DESCARGAR AUDIO
+    # -----------------------------------------------------------------
+
+    Write-Log "Descargando audio."
+
+
+    $audioDownloaded = Download-SafeFile `
+        -Url $wavUrl `
+        -Destination $wavPath `
+        -MinimumBytes 1000
+
+
+    if (-not $audioDownloaded) {
+
+        throw "No se pudo descargar o validar el audio."
+    }
+
+
+    # -----------------------------------------------------------------
+    # ESPERAR UNOS SEGUNDOS
+    #
+    # Ya NO se necesita mover el mouse.
+    # -----------------------------------------------------------------
+
+    Write-Log "Recursos preparados correctamente."
+
+
+    Write-Log "Esperando $delayBeforeEffect segundos antes del efecto."
+
+
+    Start-Sleep -Seconds $delayBeforeEffect
+
+
+    # -----------------------------------------------------------------
+    # MOSTRAR IMAGEN Y REPRODUCIR AUDIO
+    # -----------------------------------------------------------------
+
+    Write-Log "Mostrando imagen y reproduciendo audio."
+
+
+    Show-JumpScare `
+        -Image $imagePath `
+        -Audio $wavPath `
+        -DurationSeconds $effectDuration
+
+
+    Write-Log "Efecto completado correctamente."
+
+}
 catch {
 
-    Write-Host ""
-    Write-Host "Se produjo un error:"
-    Write-Host $_.Exception.Message
-}
+    Write-Log "ERROR: $($_.Exception.Message)"
 
+
+    Write-Host ""
+
+
+    Write-Host `
+        "No se pudo completar la ejecución." `
+        -ForegroundColor Red
+
+
+    Write-Host ""
+
+
+    Write-Host "Detalle:"
+
+
+    Write-Host $_.Exception.Message
+
+}
 finally {
 
-    # Eliminar únicamente los archivos creados por este script.
+    # =================================================================
+    # 9. LIMPIEZA SEGURA
+    #
+    # Solo elimina:
+    # - jumpscare.png descargado por este script
+    # - scream.wav descargado por este script
+    #
+    # NO borra todo TEMP.
+    # NO borra historiales.
+    # NO vacía la papelera.
+    # =================================================================
+
 
     if (Test-Path $imagePath) {
+
         Remove-Item `
             -Path $imagePath `
             -Force `
             -ErrorAction SilentlyContinue
     }
 
+
     if (Test-Path $wavPath) {
+
         Remove-Item `
             -Path $wavPath `
             -Force `
             -ErrorAction SilentlyContinue
     }
 
-    if (Test-Path $workFolder) {
-        Remove-Item `
-            -Path $workFolder `
-            -Force `
-            -ErrorAction SilentlyContinue
-    }
 
-    Write-Host ""
-    Write-Host "Finalizado."
+    Write-Log "Script finalizado."
 }
