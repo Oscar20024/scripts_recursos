@@ -34,7 +34,7 @@ $wavUrl = "https://raw.githubusercontent.com/Oscar20024/scripts_recursos/main/sc
 
 
 # Tiempo que espera antes de mostrar el efecto
-$delayBeforeEffect = 0.5
+$delayBeforeEffect = 1
 
 
 # Tiempo que la imagen permanecerá en pantalla
